@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Digit Classifier</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              border: "hsl(214.3 31.8% 91.4%)",
+              input: "hsl(214.3 31.8% 91.4%)",
+              ring: "hsl(222.2 47.4% 11.2%)",
+              background: "hsl(0 0% 100%)",
+              foreground: "hsl(222.2 47.4% 11.2%)",
+              primary: {
+                DEFAULT: "hsl(222.2 47.4% 11.2%)",
+                foreground: "hsl(210 40% 98%)",
+              },
+              secondary: {
+                DEFAULT: "hsl(210 40% 96.1%)",
+                foreground: "hsl(222.2 47.4% 11.2%)",
+              },
+              muted: {
+                DEFAULT: "hsl(210 40% 96.1%)",
+                foreground: "hsl(215.4 16.3% 46.9%)",
+              },
+              accent: {
+                DEFAULT: "hsl(210 40% 96.1%)",
+                foreground: "hsl(222.2 47.4% 11.2%)",
+              },
+              card: {
+                DEFAULT: "hsl(0 0% 100%)",
+                foreground: "hsl(222.2 47.4% 11.2%)",
+              },
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      #canvas {
+        border: 2px solid hsl(222.2 47.4% 11.2%);
+        cursor: crosshair;
+        touch-action: none;
+      }
+    </style>
+  </head>
+  <body class="min-h-screen p-8 flex flex-col items-center justify-center bg-gray-50">
+    <div class="w-full max-w-2xl flex flex-col gap-6">
+      <header class="border bg-card text-card-foreground shadow-sm rounded-xl p-6 flex flex-col gap-4">
+        <h1 class="text-3xl font-bold tracking-tight">Digit Classifier</h1>
+        <p class="text-muted-foreground text-sm">
+          Select a model, then draw a digit (0-9) on the canvas.
+        </p>
+      </header>
+
+      <main class="border bg-card text-card-foreground shadow-sm rounded-xl p-6 flex flex-col gap-4">
+        <div class="flex flex-col sm:flex-row gap-3 items-end">
+          <select
+            name="model"
+            id="model"
+            class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+          ></select>
+
+          <button
+            id="clear"
+            class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-secondary text-secondary-foreground hover:bg-secondary/80 h-10 px-4 py-2 w-full sm:w-auto"
+          >
+            Clear
+          </button>
+        </div>
+
+        <div class="flex justify-center">
+          <canvas id="canvas" width="280" height="280" class="rounded-lg shadow-md"></canvas>
+        </div>
+
+        <div id="results" class="flex flex-col gap-3 hidden">
+          <h3 class="font-semibold">Predictions:</h3>
+          <div id="resultsList" class="grid grid-cols-5 gap-2"></div>
+        </div>
+      </main>
+
+      <footer class="border bg-card text-card-foreground shadow-sm rounded-xl p-6 flex flex-col gap-2 text-sm">
+        <div class="flex gap-2 items-center">
+          <span class="flex h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
+          <p id="status" class="text-sm font-medium text-foreground">initializing...</p>
+        </div>
+        <p id="timer" class="text-muted-foreground text-xs"></p>
+      </footer>
+    </div>
+
+    <script type="module">
+      let net;
+      let isDrawing = false;
+      let drawingTimeout;
+      const INFERENCE_DELAY = 500; // ms to wait after drawing stops
+
+      const models = ["mnist_mlp", "mnist_convnet"];
+      const modelSelect = document.getElementById("model");
+      const statusText = document.getElementById("status");
+      const timerText = document.getElementById("timer");
+      const clearButton = document.getElementById("clear");
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      const resultsDiv = document.getElementById("results");
+      const resultsList = document.getElementById("resultsList");
+
+      // Initialize canvas with white background
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const error = (err) => {
+        statusText.innerHTML = `Error: ${err}`;
+        console.error(err);
+      };
+
+      const timer = async (func, label = "") => {
+        timerText.innerHTML = "";
+        const start = performance.now();
+        const out = await func();
+        const delta = (performance.now() - start).toFixed(1);
+        console.log(`${delta} ms ${label}`);
+        timerText.innerHTML = `${delta} ms ${label}`;
+        return out;
+      };
+
+      const getDevice = async () => {
+        if (!navigator.gpu) throw new Error("WebGPU not supported.");
+        const adapter = await navigator.gpu.requestAdapter();
+        return await adapter.requestDevice({
+          requiredFeatures: ["shader-f16"],
+          powerPreference: "high-performance",
+        });
+      };
+
+      const loadNet = async (modelName) => {
+        const jsPath = `./models/${modelName}/${modelName}.js`;
+        const netPath = `./models/${modelName}/${modelName}.webgpu.safetensors`;
+        try {
+          statusText.innerHTML = "loading the model...";
+          const device = await getDevice();
+          const tinygrad = (await import(jsPath)).default;
+          net = await timer(
+            () => tinygrad.load(device, netPath),
+            "(compilation)"
+          );
+          statusText.innerHTML = "ready to classify";
+        } catch (e) {
+          error(`${e.message}`);
+          console.error(e);
+        }
+      };
+
+      const preprocessImage = () => {
+        const modelSize = 28;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+        
+        // Resize from 280x280 to 28x28 by averaging 10x10 blocks
+        const resized = new Float32Array(modelSize * modelSize);
+        const blockSize = canvas.width / modelSize;
+        
+        for (let y = 0; y < modelSize; y++) {
+          for (let x = 0; x < modelSize; x++) {
+            let sum = 0;
+            let count = 0;
+            
+            // Average all pixels in this block
+            for (let by = 0; by < blockSize; by++) {
+              for (let bx = 0; bx < blockSize; bx++) {
+                const px = Math.floor(x * blockSize + bx);
+                const py = Math.floor(y * blockSize + by);
+                const idx = (py * canvas.width + px) * 4;
+                
+                const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3 / 255;
+                sum += gray;
+                count++;
+              }
+            }
+            
+            const normalized = 1 - (sum / count);
+            resized[y * modelSize + x] = normalized * 2 - 1;
+          }
+        }
+        
+        return resized;
+      };
+
+      const runNet = async () => {
+        if (!net) {
+          error("Model not loaded yet.");
+          return;
+        }
+
+        try {
+          const input = preprocessImage();
+          const res = await timer(() => net(input), "(inference)");
+          const logits = Array.from(new Float32Array(res[0]));
+
+          const softmax = (arr) => {
+            const max = Math.max(...arr);
+            const exp = arr.map((x) => Math.exp(x - max));
+            const sum = exp.reduce((a, b) => a + b);
+            return exp.map((x) => x / sum);
+          };
+
+          const probs = softmax(logits);
+          const predictions = probs.map((p, i) => ({ digit: i, prob: p }));
+          predictions.sort((a, b) => b.prob - a.prob);
+
+          resultsList.innerHTML = predictions
+            .map(
+              ({ digit, prob }) => `
+            <div class="flex flex-col items-center gap-1">
+              <div class="text-lg font-bold">${digit}</div>
+              <div class="w-full bg-gray-200 rounded-full h-2">
+                <div class="bg-blue-600 h-2 rounded-full" style="width: ${prob * 100}%"></div>
+              </div>
+              <div class="text-xs text-muted-foreground">${(prob * 100).toFixed(1)}%</div>
+            </div>
+          `
+            )
+            .join("");
+
+          resultsDiv.classList.remove("hidden");
+          statusText.innerHTML = `Prediction: <strong>${predictions[0].digit}</strong> (${(predictions[0].prob * 100).toFixed(1)}%)`;
+        } catch (e) {
+          error(e);
+        }
+      };
+
+      const scheduleInference = () => {
+        // Clear any pending inference
+        clearTimeout(drawingTimeout);
+        
+        // Schedule new inference after drawing stops
+        drawingTimeout = setTimeout(() => {
+          runNet();
+        }, INFERENCE_DELAY);
+      };
+
+      // Drawing functions
+      let lastX = 0;
+      let lastY = 0;
+
+      canvas.addEventListener("mousedown", (e) => {
+        isDrawing = true;
+        const rect = canvas.getBoundingClientRect();
+        lastX = e.clientX - rect.left;
+        lastY = e.clientY - rect.top;
+        ctx.fillStyle = "black";
+        ctx.beginPath();
+        ctx.arc(lastX, lastY, 8, 0, Math.PI * 2);
+        ctx.fill();
+        scheduleInference();
+      });
+
+      canvas.addEventListener("mousemove", (e) => {
+        if (!isDrawing) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        // Draw smooth line between last position and current position
+        ctx.fillStyle = "black";
+        ctx.lineWidth = 16;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        
+        lastX = x;
+        lastY = y;
+        scheduleInference();
+      });
+
+      canvas.addEventListener("mouseup", () => {
+        isDrawing = false;
+      });
+
+      canvas.addEventListener("mouseleave", () => {
+        isDrawing = false;
+      });
+
+      clearButton.addEventListener("click", () => {
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        resultsDiv.classList.add("hidden");
+        statusText.innerHTML = "ready to classify";
+        clearTimeout(drawingTimeout);
+      });
+
+      modelSelect.addEventListener("change", (e) => loadNet(e.target.value));
+
+      const setup = async () => {
+        for (const model of models) {
+          const modelOpt = document.createElement("option");
+          modelOpt.value = model;
+          modelOpt.innerHTML = model;
+          modelSelect.appendChild(modelOpt);
+        }
+        try {
+          await loadNet(modelSelect.value);
+        } catch (e) {
+          error(e);
+        }
+      };
+
+      setup();
+    </script>
+  </body>
+</html>
