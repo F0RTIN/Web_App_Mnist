@@ -124,7 +124,7 @@ if __name__ == "__main__":
 
   test_acc, best_acc, best_since = float('nan'), 0, 0
   best_file = None
-  for i in (t:=trange(getenv("STEPS", 15))):
+  for i in (t:=trange(getenv("STEPS", 400))):
     loss = train_step()
 
     if (i % 10 == 9) and (test_acc := get_test_acc().item()) > best_acc:

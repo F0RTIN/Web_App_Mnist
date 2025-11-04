@@ -126,7 +126,7 @@ if __name__ == "__main__":
     test_acc, best_acc, best_since = float('nan'), 0, 0
     best_file = None
 
-    for i in (t:=trange(getenv("STEPS", 200))):
+    for i in (t:=trange(getenv("STEPS", 400))):
         loss = train_step()
 
         # Sauvegarde du meilleur modèle
