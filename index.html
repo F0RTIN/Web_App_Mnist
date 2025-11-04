@@ -137,8 +137,8 @@
       };
 
       const loadNet = async (modelName) => {
-        const jsPath = `./models/${modelName}/${modelName}.js`;
-        const netPath = `./models/${modelName}/${modelName}.webgpu.safetensors`;
+        const jsPath = `./docs/models/${modelName}/${modelName}.js`;
+        const netPath = `./docs/models/${modelName}/${modelName}.webgpu.safetensors`;
         try {
           statusText.innerHTML = "loading the model...";
           const device = await getDevice();
